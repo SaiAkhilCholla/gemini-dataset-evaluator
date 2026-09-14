@@ -59,7 +59,7 @@ if uploaded_file and st.button("Evaluate Entire Dataset"):
                 client = genai.Client(api_key=api_key)
                 
                 sample_size = min(15, total_rows)
-                sample_data = df.sample(sample_size).to_string()
+                sample_data = df.sample(sample_size, random_state=42).to_string()
                 
                 prompt = f"""
                 You are the Head Judge for a Dataset Creation Challenge focused on '{topic}'.
