@@ -1,4 +1,4 @@
 streamlit
-google-cloud-aiplatform
+google-cloud-aiplatform[evaluation]
 pandas
 google-auth
