@@ -4,10 +4,10 @@ import streamlit as st
 import vertexai
 from google.oauth2 import service_account
 from vertexai.generative_models import GenerativeModel
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.metrics import accuracy_score
 
-st.set_page_config(page_title="Data Science Dataset Evaluator", layout="wide")
-st.title("🔬 Data Science Dataset & Model Evaluator")
+st.set_page_config(page_title="Dataset Challenge Evaluator", layout="wide")
+st.title("🏆 Dataset Creation Challenge - Global Evaluator")
 
 # --- BACKGROUND GCP AUTHENTICATION ---
 location = "us-central1"
@@ -22,12 +22,12 @@ except Exception:
 
 # --- UI SIDEBAR ---
 with st.sidebar:
-    st.header("⚙️ Evaluation Setup")
+    st.header("⚙️ Challenge Criteria")
     topic = st.selectbox(
-        "Classification Task",
-        ["Phishing Detection", "Fake News Detection", "Product Review Sentiment", "Cybersecurity Threat", "Emergency Classification"]
+        "Evaluation Category",
+        ["Fake News Detection", "Phishing Detection", "Product Review Sentiment", "Cybersecurity Threat", "Emergency Classification"]
     )
-    st.info("Project ID and credentials loaded securely.")
+    st.info("Evaluating entire dataset submission quality.")
 
 def init_gcp():
     if "gcp_service_account" in st.secrets:
@@ -37,29 +37,23 @@ def init_gcp():
     else:
         vertexai.init(project=project_id, location=location)
 
-def get_rubric(selected_topic):
-    rubrics = {
-        "Phishing Detection": "Classify text as Phishing or Legitimate. Criteria: Phishing (urgent requests, credential harvesting, fake links), Legitimate (normal communication). Rate 1 to 5.",
-        "Fake News Detection": "Classify text as Fake or Real. Criteria: Fake (sensationalist, unverified claims, emotional bias), Real (objective, verified facts). Rate 1 to 5.",
-        "Product Review Sentiment": "Classify review as Positive, Negative, or Neutral. Rate 1 to 5.",
-        "Cybersecurity Threat": "Classify threat type (Malware, Phishing, DDoS, Other). Rate 1 to 5.",
-        "Emergency Classification": "Classify message category (Medical, Fire, Flood, Rescue, Other). Rate 1 to 5."
-    }
-    return rubrics.get(selected_topic, rubrics["Fake News Detection"])
-
 # --- MAIN INTERFACE ---
-uploaded_file = st.file_uploader("Upload CSV Dataset", type=["csv"])
+uploaded_file = st.file_uploader("Upload Challenge Submission CSV", type=["csv"])
 
-if uploaded_file and st.button("Run Data Science Evaluation"):
+if uploaded_file and st.button("Evaluate Entire Dataset"):
     try:
         df = pd.read_csv(uploaded_file)
         
-        # --- DATA SCIENTIST PROFILING ---
-        st.subheader("📊 Dataset Health & Profiling")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Rows", len(df))
-        col2.metric("Missing Values", df.isnull().sum().sum())
-        col3.metric("Duplicate Rows", df.duplicated().sum())
+        # --- 1. DATA INTEGRITY & HEALTH METRICS ---
+        st.subheader("📊 Dataset Health & Integrity")
+        total_rows = len(df)
+        missing_count = df.isnull().sum().sum()
+        dup_count = df.duplicated().sum()
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Submissions", total_rows)
+        col2.metric("Missing Values", missing_count, delta="0 is best" if missing_count == 0 else "Has gaps", delta_color="inverse")
+        col3.metric("Duplicate Rate", f"{(dup_count/total_rows)*100:.1f}%")
         
         label_col = None
         for col in ["reference", "label", "target", "class", "subject"]:
@@ -68,79 +62,68 @@ if uploaded_file and st.button("Run Data Science Evaluation"):
                 break
                 
         if label_col:
-            st.write(f"**Distribution based on '{label_col}' column:**")
-            st.bar_chart(df[label_col].value_counts())
+            class_counts = df[label_col].value_counts()
+            col4.metric("Unique Classes", len(class_counts))
+            st.write(f"**Class Balance Distribution ({label_col}):**")
+            st.bar_chart(class_counts)
 
-        # --- STATISTICAL METRICS (SKLEARN) ---
-        if "response" in df.columns and "reference" in df.columns:
-            st.subheader("📈 Statistical Classification Performance")
-            y_true = df["reference"].astype(str)
-            y_pred = df["response"].astype(str)
-            
-            acc = accuracy_score(y_true, y_pred)
-            st.metric("Model Accuracy", f"{acc * 100:.2f}%")
-            
-            report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)
-            st.write("**Classification Report:**")
-            st.dataframe(pd.DataFrame(report).transpose())
-
-        # --- DIRECT GEMINI LLM JUDGE EVALUATION ---
-        with st.spinner("Running Gemini LLM Deep Evaluation..."):
+        # --- 2. GLOBAL GEMINI DATASET JUDGE ---
+        with st.spinner("Gemini is analyzing the entire dataset quality for the challenge..."):
             init_gcp()
-            rubric_text = get_rubric(topic)
             model = GenerativeModel("gemini-1.5-flash")
             
-            scores = []
-            explanations = []
+            # Take a smart sample of the dataset for the LLM judge overview
+            sample_size = min(15, total_rows)
+            sample_data = df.sample(sample_size).to_string()
             
-            metric_name = f"{topic.lower().replace(' ,', '').replace(' ', '_')}_score"
-            explanation_name = f"{topic.lower().replace(' ', '_')}_explanation"
+            prompt = f"""
+            You are the Head Judge for a Dataset Creation Challenge focused on '{topic}'.
+            Analyze the following sample from a competitor's submitted dataset of {total_rows} total rows:
             
-            progress_bar = st.progress(0)
-            total_rows = len(df)
+            Dataset Sample:
+            {sample_data}
             
-            for idx, row in df.iterrows():
-                text_content = row.get("text", row.get("title", str(row)))
-                true_label = row.get("reference", "Unknown")
+            Evaluate the entire dataset submission based on:
+            1. Relevance and quality of text content for '{topic}'.
+            2. Label consistency and structure.
+            3. Suitability for training or evaluating machine learning models.
+            
+            Respond strictly in valid JSON format with these exact keys:
+            - "overall_score": an integer score from 0 to 100 representing the total dataset grade.
+            - "verdict": a short summary phrase (e.g., "Excellent Submission", "Needs Refinement").
+            - "strengths": a paragraph outlining what makes this dataset great.
+            - "weaknesses": a paragraph noting any flaws or potential biases.
+            - "recommendation": final feedback for the challenge participant.
+            """
+            
+            response = model.generate_content(prompt)
+            clean_text = response.text.strip()
+            if clean_text.startswith("```json"):
+                clean_text = clean_text[7:-3].strip()
+            elif clean_text.startswith("```"):
+                clean_text = clean_text[3:-3].strip()
                 
-                prompt = f"""
-                You are an expert Data Scientist and AI Judge.
-                Task Rubric: {rubric_text}
-                
-                Text to evaluate: "{text_content}"
-                Expected Reference Label: {true_label}
-                
-                Respond in valid JSON format with exactly two keys:
-                - "score": an integer from 1 to 5
-                - "explanation": a brief explanation of why this score was given.
-                """
-                try:
-                    response = model.generate_content(prompt)
-                    clean_text = response.text.strip()
-                    if clean_text.startswith("```json"):
-                        clean_text = clean_text[7:-3].strip()
-                    elif clean_text.startswith("```"):
-                        clean_text = clean_text[3:-3].strip()
-                        
-                    res_json = json.loads(clean_text)
-                    scores.append(res_json.get("score", 3))
-                    explanations.append(res_json.get("explanation", "Evaluated successfully."))
-                except Exception:
-                    scores.append(3)
-                    explanations.append("Evaluated successfully based on standard criteria.")
-                    
-                progress_bar.progress((idx + 1) / total_rows)
+            eval_result = json.loads(clean_text)
             
-            df[metric_name] = scores
-            df[explanation_name] = explanations
+            # --- 3. DISPLAY CHALLENGE RESULTS ---
+            st.markdown("---")
+            st.subheader("🏆 Challenge Evaluation Report")
             
-            st.subheader("🤖 Gemini Evaluator Insights")
-            st.dataframe(df)
+            score_col, verdict_col = st.columns([1, 2])
+            score_col.metric("Overall Dataset Score", f"{eval_result.get('overall_score', 0)} / 100")
+            verdict_col.success(f"**Verdict:** {eval_result.get('verdict', 'Evaluated')}")
             
+            st.markdown(f"**💪 Strengths:**\n{eval_result.get('strengths', 'N/A')}")
+            st.markdown(f"**⚠️ Weaknesses & Biases:**\n{eval_result.get('weaknesses', 'N/A')}")
+            st.markdown(f"**💡 Judge's Recommendation:**\n{eval_result.get('recommendation', 'N/A')}")
+            
+            # Export Report Summary
+            report_summary = pd.DataFrame([eval_result])
             st.download_button(
-                "Download Complete Analysis CSV",
-                data=df.to_csv(index=False).encode('utf-8'),
-                file_name="ds_evaluation_results.csv"
+                "Download Challenge Report Summary",
+                data=report_summary.to_csv(index=False).encode('utf-8'),
+                file_name="challenge_evaluation_report.csv"
             )
+            
     except Exception as e:
-        st.error(f"Error executing data analysis: {e}")
+        st.error(f"Error evaluating dataset: {e}")
