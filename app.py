@@ -1,4 +1,5 @@
 import json
+import time
 import pandas as pd
 import streamlit as st
 from google import genai
@@ -19,7 +20,21 @@ with st.sidebar:
     if not api_key:
         api_key = st.text_input("Gemini API Key", type="password")
     
-    st.info("Connected to Google AI Studio (Free Tier). No billing required.")
+    st.info("Connected to Google AI Studio (Free Tier). Auto-retry enabled for high demand.")
+
+# --- ROBUST API CALL WITH RETRY ---
+def call_gemini_with_retry(client, model, prompt, max_retries=3):
+    delay = 2
+    for attempt in range(max_retries):
+        try:
+            return client.models.generate_content(model=model, contents=prompt)
+        except Exception as e:
+            err_msg = str(e)
+            if ("503" in err_msg or "UNAVAILABLE" in err_msg or "overloaded" in err_msg) and attempt < max_retries - 1:
+                time.sleep(delay)
+                delay *= 2  # Exponential backoff
+                continue
+            raise e
 
 # --- MAIN INTERFACE ---
 uploaded_file = st.file_uploader("Upload Challenge Submission CSV", type=["csv"])
@@ -55,9 +70,10 @@ if uploaded_file and st.button("Evaluate Entire Dataset"):
                 st.bar_chart(class_counts)
 
             # --- 2. GLOBAL GEMINI DATASET JUDGE ---
-            with st.spinner("Gemini is analyzing the entire dataset quality for the challenge..."):
+            with st.spinner("Gemini is analyzing the entire dataset quality (retrying automatically if busy)..."):
                 client = genai.Client(api_key=api_key)
                 
+                # Fixed seed for consistent reproducible scoring
                 sample_size = min(15, total_rows)
                 sample_data = df.sample(sample_size, random_state=42).to_string()
                 
@@ -81,11 +97,7 @@ if uploaded_file and st.button("Evaluate Entire Dataset"):
                 - "recommendation": final feedback for the challenge participant.
                 """
                 
-                # Updated to use the active model name requested by the API
-                response = client.models.generate_content(
-                    model="gemini-3.6-flash",
-                    contents=prompt
-                )
+                response = call_gemini_with_retry(client, "gemini-3.6-flash", prompt)
                 
                 clean_text = response.text.strip()
                 if clean_text.startswith("```json"):
