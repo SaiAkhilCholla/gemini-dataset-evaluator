@@ -54,9 +54,13 @@ def get_eval_metric(selected_topic):
         }
     }
     cfg = rubrics.get(selected_topic, rubrics["Phishing Detection"])
-    return LLMMetric(
-        name=f'{selected_topic.lower().replace(" ", "_")}_metric',
-        prompt_template=MetricPromptBuilder(instruction=cfg["instruction"], criteria=cfg["criteria"])
+    
+    return PointwiseMetric(
+        metric=f'{selected_topic.lower().replace(" ", "_")}_metric',
+        metric_prompt_template=PointwiseMetricPromptTemplate(
+            instruction=cfg["instruction"],
+            criteria=cfg["criteria"]
+        )
     )
 
 # --- MAIN INTERFACE ---
