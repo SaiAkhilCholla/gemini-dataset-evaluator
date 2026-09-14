@@ -15,7 +15,6 @@ with st.sidebar:
         ["Fake News Detection", "Phishing Detection", "Product Review Sentiment", "Cybersecurity Threat", "Emergency Classification"]
     )
     
-    # Automatically pulls the API key from Streamlit Secrets
     api_key = st.secrets.get("gemini_api_key", "")
     if not api_key:
         api_key = st.text_input("Gemini API Key", type="password")
@@ -75,15 +74,16 @@ if uploaded_file and st.button("Evaluate Entire Dataset"):
                 3. Suitability for training or evaluating machine learning models.
                 
                 Respond strictly in valid JSON format with these exact keys:
-                - "overall_score": an integer score from 0 to 00 representing the total dataset grade.
+                - "overall_score": an integer score from 0 to 100 representing the total dataset grade.
                 - "verdict": a short summary phrase (e.g., "Excellent Submission", "Needs Refinement").
                 - "strengths": a paragraph outlining what makes this dataset great.
                 - "weaknesses": a paragraph noting any flaws or potential biases.
                 - "recommendation": final feedback for the challenge participant.
                 """
                 
+                # Updated to use the active model name requested by the API
                 response = client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-3.6-flash",
                     contents=prompt
                 )
                 
