@@ -2,3 +2,4 @@ streamlit
 google-cloud-aiplatform[evaluation]
 pandas
 google-auth
+scikit-learn
