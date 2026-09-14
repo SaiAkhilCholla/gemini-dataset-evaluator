@@ -34,23 +34,28 @@ def get_eval_metric(selected_topic):
     rubrics = {
         "Phishing Detection": {
             "instruction": "Classify text as Phishing or Legitimate.",
-            "criteria": {"Phishing": "Urgent requests, credential harvesting, fake links.", "Legitimate": "Normal communication, verifiable sender."}
+            "criteria": {"Phishing": "Urgent requests, credential harvesting, fake links.", "Legitimate": "Normal communication, verifiable sender."},
+            "rating_rubric": {"1": "Incorrect classification or failure to follow criteria.", "5": "Accurate classification matching the criteria."}
         },
         "Fake News Detection": {
             "instruction": "Classify text as Fake or Real.",
-            "criteria": {"Fake": "Sensationalist, unverified claims, emotional bias.", "Real": "Objective, verified facts, credible sources."}
+            "criteria": {"Fake": "Sensationalist, unverified claims, emotional bias.", "Real": "Objective, verified facts, credible sources."},
+            "rating_rubric": {"1": "Incorrect classification.", "5": "Correct classification."}
         },
         "Product Review Sentiment": {
             "instruction": "Classify review as Positive, Negative, or Neutral.",
-            "criteria": {"Positive": "Satisfaction, praise.", "Negative": "Disappointment, defects.", "Neutral": "Indifferent, purely informational."}
+            "criteria": {"Positive": "Satisfaction, praise.", "Negative": "Disappointment, defects.", "Neutral": "Indifferent, purely informational."},
+            "rating_rubric": {"1": "Incorrect sentiment assignment.", "5": "Accurate sentiment assignment."}
         },
         "Cybersecurity Threat": {
             "instruction": "Classify as Malware, Phishing, DDoS, or Other.",
-            "criteria": {"Malware": "Payloads/viruses.", "Phishing": "Social engineering.", "DDoS": "Traffic exhaustion.", "Other": "General issues."}
+            "criteria": {"Malware": "Payloads/viruses.", "Phishing": "Social engineering.", "DDoS": "Traffic exhaustion.", "Other": "General issues."},
+            "rating_rubric": {"1": "Incorrect threat classification.", "5": "Correct threat classification."}
         },
         "Emergency Classification": {
             "instruction": "Classify message as Medical, Fire, Flood, Rescue, or Other.",
-            "criteria": {"Medical": "Health crises.", "Fire": "Smoke/flames.", "Flood": "Rising water.", "Rescue": "Trapped individuals.", "Other": "Non-urgent."}
+            "criteria": {"Medical": "Health crises.", "Fire": "Smoke/flames.", "Flood": "Rising water.", "Rescue": "Trapped individuals.", "Other": "Non-urgent."},
+            "rating_rubric": {"1": "Incorrect emergency category.", "5": "Correct emergency category."}
         }
     }
     cfg = rubrics.get(selected_topic, rubrics["Phishing Detection"])
@@ -59,7 +64,8 @@ def get_eval_metric(selected_topic):
         metric=f'{selected_topic.lower().replace(" ", "_")}_metric',
         metric_prompt_template=PointwiseMetricPromptTemplate(
             instruction=cfg["instruction"],
-            criteria=cfg["criteria"]
+            criteria=cfg["criteria"],
+            rating_rubric=cfg["rating_rubric"]
         )
     )
 
