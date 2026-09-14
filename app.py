@@ -1,6 +1,5 @@
 import json
 import os
-import time
 import pandas as pd
 import streamlit as st
 from google import genai
@@ -9,7 +8,6 @@ st.set_page_config(page_title="Dataset Challenge Evaluator", layout="wide")
 
 LEADERBOARD_FILE = "leaderboard.json"
 
-# --- PERSISTENT LEADERBOARD LOADING ---
 def load_leaderboard():
     if os.path.exists(LEADERBOARD_FILE):
         try:
@@ -29,6 +27,9 @@ def save_leaderboard(lb):
 if "leaderboard" not in st.session_state:
     st.session_state.leaderboard = load_leaderboard()
 
+if "key_index" not in st.session_state:
+    st.session_state.key_index = 0
+
 # --- UI SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Challenge Setup")
@@ -38,16 +39,23 @@ with st.sidebar:
         ["Fake News Detection", "Phishing Detection", "Product Review Sentiment", "Cybersecurity Threat", "Emergency Classification"]
     )
     
-    api_key = st.secrets.get("gemini_api_key", "")
-    if not api_key:
-        api_key = st.text_input("Gemini API Key", type="password")
+    st.markdown("---")
+    st.subheader("🔑 Gemini API Keys Pool")
+    # Pulls multiple keys from secrets or allows text area entry
+    default_keys_secret = st.secrets.get("gemini_api_keys", st.secrets.get("gemini_api_key", ""))
+    keys_input = st.text_area(
+        "Enter API Keys (comma or line separated)",
+        value=default_keys_secret,
+        placeholder="AIzaSyKey1..., AIzaSyKey2...",
+        help="Add multiple keys to auto-rotate when quota limits are reached."
+    )
+    
+    st.info("🔄 Auto-rotation enabled across all provided keys.")
     
     st.markdown("---")
-    
-    # --- SECURED ADMIN PANEL FOR RESET BUTTON ---
     with st.expander("🔐 Host / Admin Controls"):
         admin_pwd = st.text_input("Admin Password", type="password", placeholder="Enter password")
-        expected_pwd = st.secrets.get("admin_password", "srishti2026") # Default fallback password
+        expected_pwd = st.secrets.get("admin_password", "srishti2026")
         
         if admin_pwd == expected_pwd:
             if st.button("🔄 Reset Leaderboard"):
@@ -67,95 +75,113 @@ with tab1:
     st.title("🏆 Dataset Creation Challenge - Global Evaluator")
     uploaded_file = st.file_uploader("Upload Challenge Submission CSV", type=["csv"])
 
-    def call_gemini_with_retry(client, model, prompt, max_retries=3):
-        delay = 3
-        for attempt in range(max_retries):
+    # --- API CALL WITH AUTOMATIC KEY ROTATION ---
+    def call_gemini_with_rotation(keys_list, prompt):
+        if not keys_list:
+            raise Exception("No API keys provided. Please enter at least one Gemini API Key.")
+        
+        current_index = st.session_state.key_index
+        attempts = 0
+        max_attempts = len(keys_list)
+        
+        while attempts < max_attempts:
+            active_key = keys_list[current_index]
             try:
-                return client.models.generate_content(model=model, contents=prompt)
+                client = genai.Client(api_key=active_key)
+                response = client.models.generate_content(
+                    model="gemini-3.6-flash",
+                    contents=prompt,
+                    config={"temperature": 0.0}
+                )
+                return response
             except Exception as e:
                 err_msg = str(e)
-                if ("429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "503" in err_msg) and attempt < max_retries - 1:
-                    time.sleep(delay)
-                    delay *= 2
+                # If quota/rate limit error, switch to the next key
+                if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
+                    current_index = (current_index + 1) % len(keys_list)
+                    st.session_state.key_index = current_index
+                    attempts += 1
                     continue
-                raise e
+                else:
+                    raise e
+        raise Exception("All provided API keys have exceeded their free tier rate limits. Please add more keys!")
 
     if uploaded_file and st.button("Evaluate Entire Dataset"):
         if not team_leader.strip():
             st.error("Please enter the Team Leader Name in the sidebar before evaluating!")
-        elif not api_key:
-            st.error("Please provide your Gemini API Key in Streamlit Secrets or sidebar.")
         else:
-            try:
-                df = pd.read_csv(uploaded_file)
-                
-                # --- 1. DATA INTEGRITY & HEALTH METRICS ---
-                st.subheader("📊 Dataset Health & Integrity")
-                total_rows = len(df)
-                missing_count = df.isnull().sum().sum()
-                dup_count = df.duplicated().sum()
-                
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Total Submissions", total_rows)
-                col2.metric("Missing Values", missing_count)
-                col3.metric("Duplicate Rate", f"{(dup_count/total_rows)*100:.1f}%")
-                
-                label_col = None
-                for col in ["reference", "label", "target", "class", "subject"]:
-                    if col in df.columns:
-                        label_col = col
-                        break
-                        
-                if label_col:
-                    class_counts = df[label_col].value_counts()
-                    col4.metric("Unique Classes", len(class_counts))
-                    st.write(f"**Class Balance Distribution ({label_col}):**")
-                    st.bar_chart(class_counts)
+            # Parse all provided keys (supports comma or newline separation)
+            api_keys_list = [k.strip() for k in keys_input.replace(",", "\n").split("\n") if k.strip()]
+            
+            if not api_keys_list:
+                st.error("Please provide at least one Gemini API Key.")
+            else:
+                try:
+                    df = pd.read_csv(uploaded_file)
+                    
+                    # --- 1. DATA INTEGRITY & HEALTH METRICS ---
+                    st.subheader("📊 Dataset Health & Integrity")
+                    total_rows = len(df)
+                    missing_count = int(df.isnull().sum().sum())
+                    dup_count = int(df.duplicated().sum())
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Total Submissions", total_rows)
+                    col2.metric("Missing Values", missing_count)
+                    col3.metric("Duplicate Rate", f"{(dup_count/total_rows)*100:.1f}%")
+                    
+                    label_col = None
+                    for col in ["reference", "label", "target", "class", "subject"]:
+                        if col in df.columns:
+                            label_col = col
+                            break
+                            
+                    if label_col:
+                        class_counts = df[label_col].value_counts()
+                        col4.metric("Unique Classes", len(class_counts))
+                        st.write(f"**Class Balance Distribution ({label_col}):**")
+                        st.bar_chart(class_counts)
 
-                # --- 2. GLOBAL GEMINI DATASET JUDGE ---
-                with st.spinner(f"Evaluating submission for team {team_leader}..."):
-                    client = genai.Client(api_key=api_key)
-                    
-                    sample_size = min(10, total_rows)
-                    sampled_df = df.sample(sample_size, random_state=42).copy()
-                    
-                    for col in sampled_df.select_dtypes(include=['object']).columns:
-                        sampled_df[col] = sampled_df[col].astype(str).str.slice(0, 120)
-                    
-                    sample_data = sampled_df.to_string()
-                    
-                    prompt = f"""
-                    You are the Head Judge for a Dataset Creation Challenge focused on '{topic}'.
-                    Analyze the following sample of {sample_size} records from a competitor's submitted dataset of {total_rows} total rows:
-                    
-                    Dataset Sample:
-                    {sample_data}
-                    
-                    Evaluate the entire dataset submission based on:
-                    1. Relevance and quality of text content for '{topic}'.
-                    2. Label consistency and structure.
-                    3. Suitability for training or evaluating machine learning models.
-                    
-                    Respond strictly in valid JSON format with these exact keys:
-                    - "overall_score": an integer score from 0 to 100 representing the total dataset grade.
-                    - "verdict": a short summary phrase (e.g., "Critically Flawed", "Excellent Submission").
-                    - "strengths": a paragraph outlining what makes this dataset great.
-                    - "weaknesses": a paragraph noting any flaws or potential biases.
-                    - "recommendation": final feedback for the challenge participant.
-                    """
-                    
-                    response = call_gemini_with_retry(client, "gemini-3.6-flash", prompt)
-                    
-                    clean_text = response.text.strip()
-                    if clean_text.startswith("```json"):
-                        clean_text = clean_text[7:-3].strip()
-                    elif clean_text.startswith("```"):
-                        clean_text = clean_text[3:-3].strip()
+                    # --- 2. GLOBAL GEMINI DATASET JUDGE WITH ROTATION ---
+                    with st.spinner(f"Evaluating submission for team {team_leader} (auto-routing key pool)..."):
+                        sample_size = min(10, total_rows)
+                        sampled_df = df.sample(sample_size, random_state=42).copy()
+                        for col in sampled_df.select_dtypes(include=['object']).columns:
+                            sampled_df[col] = sampled_df[col].astype(str).str.slice(0, 120)
+                        sample_data = sampled_df.to_string()
                         
-                    eval_json = json.loads(clean_text)
-                    score = eval_json.get('overall_score', 0)
-                    
-                    # --- ADD TO LEADERBOARD & SAVE TO DISK ---
+                        prompt = f"""
+                        You are the Head Judge for a Dataset Creation Challenge focused on '{topic}'.
+                        Analyze the following sample of {sample_size} records from a competitor's submitted dataset of {total_rows} total rows:
+                        
+                        Dataset Sample:
+                        {sample_data}
+                        
+                        Evaluate the entire dataset submission based on:
+                        1. Relevance and quality of text content for '{topic}'.
+                        2. Label consistency and structure.
+                        3. Suitability for training or evaluating machine learning models.
+                        
+                        Respond strictly in valid JSON format with these exact keys:
+                        - "overall_score": an integer score from 0 to 100 representing the total dataset grade.
+                        - "verdict": a short summary phrase (e.g., "Critically Flawed", "Excellent Submission").
+                        - "strengths": a paragraph outlining what makes this dataset great.
+                        - "weaknesses": a paragraph noting any flaws or potential biases.
+                        - "recommendation": final feedback for the challenge participant.
+                        """
+                        
+                        response = call_gemini_with_rotation(api_keys_list, prompt)
+                        
+                        clean_text = response.text.strip()
+                        if clean_text.startswith("```json"):
+                            clean_text = clean_text[7:-3].strip()
+                        elif clean_text.startswith("```"):
+                            clean_text = clean_text[3:-3].strip()
+                            
+                        eval_json = json.loads(clean_text)
+                        score = eval_json.get('overall_score', 0)
+
+                    # --- ADD TO LEADERBOARD & SAVE ---
                     entry = {
                         "Team Leader": team_leader,
                         "Dataset File": uploaded_file.name,
@@ -167,11 +193,9 @@ with tab1:
                     st.session_state.leaderboard = [item for item in st.session_state.leaderboard if not (item["Team Leader"] == team_leader and item["Dataset File"] == uploaded_file.name)]
                     st.session_state.leaderboard.append(entry)
                     st.session_state.leaderboard = sorted(st.session_state.leaderboard, key=lambda x: x["Score"], reverse=True)
-                    
-                    # Save persistence file
                     save_leaderboard(st.session_state.leaderboard)
 
-                    # --- 3. DISPLAY CHALLENGE RESULTS ---
+                    # --- 3. DISPLAY RESULTS ---
                     st.markdown("---")
                     st.subheader("🏆 Challenge Evaluation Report")
                     
@@ -190,13 +214,13 @@ with tab1:
                         file_name="challenge_evaluation_report.csv"
                     )
                     
-            except Exception as e:
-                st.error(f"Error evaluating dataset: {e}")
+                except Exception as e:
+                    st.error(f"Evaluation Error: {e}")
 
 # ================= TAB 2: LEADERBOARD =================
 with tab2:
     st.title("🏆 Challenge Leaderboard")
-    st.markdown("Top submissions ranked by their Gemini Evaluation score.")
+    st.markdown("Top submissions ranked by their evaluation score.")
 
     if not st.session_state.leaderboard:
         st.info("No submissions evaluated yet. Head over to the **Challenge Evaluator** tab to evaluate a dataset!")
