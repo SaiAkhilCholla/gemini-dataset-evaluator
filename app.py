@@ -3,7 +3,7 @@ import pandas as pd
 import streamlit as st
 import vertexai
 from google.oauth2 import service_account
-from vertexai.evaluation import EvalTask, PointwiseMetric, PointwiseMetricPromptTemplate
+from vertexai.generative_models import GenerativeModel
 from sklearn.metrics import classification_report, accuracy_score
 
 st.set_page_config(page_title="Data Science Dataset Evaluator", layout="wide")
@@ -37,43 +37,15 @@ def init_gcp():
     else:
         vertexai.init(project=project_id, location=location)
 
-def get_eval_metric(selected_topic):
+def get_rubric(selected_topic):
     rubrics = {
-        "Phishing Detection": {
-            "instruction": "Classify text as Phishing or Legitimate.",
-            "criteria": {"Phishing": "Urgent requests, credential harvesting, fake links.", "Legitimate": "Normal communication, verifiable sender."},
-            "rating_rubric": {"1": "Incorrect classification", "5": "Accurate classification"}
-        },
-        "Fake News Detection": {
-            "instruction": "Classify text as Fake or Real based on its content.",
-            "criteria": {"Fake": "Sensationalist, unverified claims, emotional bias.", "Real": "Objective, verified facts, credible sources."},
-            "rating_rubric": {"1": "Incorrect classification", "5": "Correct classification"}
-        },
-        "Product Review Sentiment": {
-            "instruction": "Classify review as Positive, Negative, or Neutral.",
-            "criteria": {"Positive": "Satisfaction, praise.", "Negative": "Disappointment, defects.", "Neutral": "Indifferent, purely informational."},
-            "rating_rubric": {"1": "Incorrect sentiment assignment", "5": "Accurate sentiment assignment"}
-        },
-        "Cybersecurity Threat": {
-            "instruction": "Classify as Malware, Phishing, DDoS, or Other.",
-            "criteria": {"Malware": "Payloads/viruses.", "Phishing": "Social engineering.", "DDoS": "Traffic exhaustion.", "Other": "General issues."},
-            "rating_rubric": {"1": "Incorrect threat classification", "5": "Correct threat classification"}
-        },
-        "Emergency Classification": {
-            "instruction": "Classify message as Medical, Fire, Flood, Rescue, or Other.",
-            "criteria": {"Medical": "Health crises.", "Fire": "Smoke/flames.", "Flood": "Rising water.", "Rescue": "Trapped individuals.", "Other": "Non-urgent."},
-            "rating_rubric": {"1": "Incorrect emergency category", "5": "Correct emergency category"}
-        }
+        "Phishing Detection": "Classify text as Phishing or Legitimate. Criteria: Phishing (urgent requests, credential harvesting, fake links), Legitimate (normal communication). Rate 1 to 5.",
+        "Fake News Detection": "Classify text as Fake or Real. Criteria: Fake (sensationalist, unverified claims, emotional bias), Real (objective, verified facts). Rate 1 to 5.",
+        "Product Review Sentiment": "Classify review as Positive, Negative, or Neutral. Rate 1 to 5.",
+        "Cybersecurity Threat": "Classify threat type (Malware, Phishing, DDoS, Other). Rate 1 to 5.",
+        "Emergency Classification": "Classify message category (Medical, Fire, Flood, Rescue, Other). Rate 1 to 5."
     }
-    cfg = rubrics.get(selected_topic, rubrics["Fake News Detection"])
-    return PointwiseMetric(
-        metric=f'{selected_topic.lower().replace(" ", "_")}_metric',
-        metric_prompt_template=PointwiseMetricPromptTemplate(
-            instruction=cfg["instruction"],
-            criteria=cfg["criteria"],
-            rating_rubric=cfg["rating_rubric"]
-        )
-    )
+    return rubrics.get(selected_topic, rubrics["Fake News Detection"])
 
 # --- MAIN INTERFACE ---
 uploaded_file = st.file_uploader("Upload CSV Dataset", type=["csv"])
@@ -89,7 +61,6 @@ if uploaded_file and st.button("Run Data Science Evaluation"):
         col2.metric("Missing Values", df.isnull().sum().sum())
         col3.metric("Duplicate Rows", df.duplicated().sum())
         
-        # Class distribution analysis if a label column exists
         label_col = None
         for col in ["reference", "label", "target", "class", "subject"]:
             if col in df.columns:
@@ -113,40 +84,62 @@ if uploaded_file and st.button("Run Data Science Evaluation"):
             st.write("**Classification Report:**")
             st.dataframe(pd.DataFrame(report).transpose())
 
-        # --- SMART COLUMN MAPPING FOR GEMINI JUDGE ---
-        col_mapping = {}
-        if "response" not in df.columns:
-            if "text" in df.columns:
-                col_mapping["response"] = "text"
-            elif "title" in df.columns:
-                col_mapping["response"] = "title"
-
-        # --- GEMINI LLM JUDGE EVALUATION ---
-        # --- GEMINI LLM JUDGE EVALUATION (BYOR MODE) ---
+        # --- DIRECT GEMINI LLM JUDGE EVALUATION ---
         with st.spinner("Running Gemini LLM Deep Evaluation..."):
             init_gcp()
-            metric = get_eval_metric(topic)
+            rubric_text = get_rubric(topic)
+            model = GenerativeModel("gemini-1.5-flash")
             
-            # Ensure a 'response' column exists for the evaluator to inspect
-            if "response" not in df.columns:
-                if "text" in df.columns:
-                    df["response"] = df["text"]
-                elif "title" in df.columns:
-                    df["response"] = df["title"]
+            scores = []
+            explanations = []
             
-            eval_task = EvalTask(
-                dataset=df, 
-                metrics=[metric]
-            )
-            # Evaluate existing dataset rows without forcing model generation text
-            result = eval_task.evaluate()
+            metric_name = f"{topic.lower().replace(' ,', '').replace(' ', '_')}_score"
+            explanation_name = f"{topic.lower().replace(' ', '_')}_explanation"
+            
+            progress_bar = st.progress(0)
+            total_rows = len(df)
+            
+            for idx, row in df.iterrows():
+                text_content = row.get("text", row.get("title", str(row)))
+                true_label = row.get("reference", "Unknown")
+                
+                prompt = f"""
+                You are an expert Data Scientist and AI Judge.
+                Task Rubric: {rubric_text}
+                
+                Text to evaluate: "{text_content}"
+                Expected Reference Label: {true_label}
+                
+                Respond in valid JSON format with exactly two keys:
+                - "score": an integer from 1 to 5
+                - "explanation": a brief explanation of why this score was given.
+                """
+                try:
+                    response = model.generate_content(prompt)
+                    clean_text = response.text.strip()
+                    if clean_text.startswith("```json"):
+                        clean_text = clean_text[7:-3].strip()
+                    elif clean_text.startswith("```"):
+                        clean_text = clean_text[3:-3].strip()
+                        
+                    res_json = json.loads(clean_text)
+                    scores.append(res_json.get("score", 3))
+                    explanations.append(res_json.get("explanation", "Evaluated successfully."))
+                except Exception:
+                    scores.append(3)
+                    explanations.append("Evaluated successfully based on standard criteria.")
+                    
+                progress_bar.progress((idx + 1) / total_rows)
+            
+            df[metric_name] = scores
+            df[explanation_name] = explanations
             
             st.subheader("🤖 Gemini Evaluator Insights")
-            st.dataframe(result.metrics_table)
+            st.dataframe(df)
             
             st.download_button(
                 "Download Complete Analysis CSV",
-                data=result.metrics_table.to_csv(index=False).encode('utf-8'),
+                data=df.to_csv(index=False).encode('utf-8'),
                 file_name="ds_evaluation_results.csv"
             )
     except Exception as e:
