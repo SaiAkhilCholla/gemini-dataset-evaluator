@@ -3,7 +3,7 @@ import pandas as pd
 import streamlit as st
 import vertexai
 from google.oauth2 import service_account
-from vertexai.evaluation import EvalTask, LLMMetric, MetricPromptBuilder
+from vertexai.evaluation import EvalTask, PointwiseMetric, PointwiseMetricPromptTemplate
 
 st.set_page_config(page_title="GenAI Dataset Evaluator", layout="wide")
 st.title("📊 GenAI Dataset Evaluator")
