@@ -9,9 +9,9 @@ from sklearn.metrics import classification_report, accuracy_score
 st.set_page_config(page_title="Data Science Dataset Evaluator", layout="wide")
 st.title("🔬 Data Science Dataset & Model Evaluator")
 
-# --- BACKGROUND GCP AUTHENTICATION (Hidden from UI) ---
+# --- BACKGROUND GCP AUTHENTICATION ---
 location = "us-central1"
-project_id = "dataset-analyser-508617"  # Default fallback
+project_id = "dataset-analyser-508617"
 
 try:
     if "gcp_service_account" in st.secrets:
@@ -20,14 +20,14 @@ try:
 except Exception:
     pass
 
-# --- CLEAN UI SIDEBAR ---
+# --- UI SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Evaluation Setup")
     topic = st.selectbox(
         "Classification Task",
         ["Phishing Detection", "Fake News Detection", "Product Review Sentiment", "Cybersecurity Threat", "Emergency Classification"]
     )
-    st.info("Project ID and security credentials are loaded securely in the background.")
+    st.info("Project ID and credentials loaded securely.")
 
 def init_gcp():
     if "gcp_service_account" in st.secrets:
@@ -45,7 +45,7 @@ def get_eval_metric(selected_topic):
             "rating_rubric": {"1": "Incorrect classification", "5": "Accurate classification"}
         },
         "Fake News Detection": {
-            "instruction": "Classify text as Fake or Real.",
+            "instruction": "Classify text as Fake or Real based on its content.",
             "criteria": {"Fake": "Sensationalist, unverified claims, emotional bias.", "Real": "Objective, verified facts, credible sources."},
             "rating_rubric": {"1": "Incorrect classification", "5": "Correct classification"}
         },
@@ -76,7 +76,7 @@ def get_eval_metric(selected_topic):
     )
 
 # --- MAIN INTERFACE ---
-uploaded_file = st.file_uploader("Upload CSV Dataset (Must contain 'response' for predictions and 'reference' for true labels)", type=["csv"])
+uploaded_file = st.file_uploader("Upload CSV Dataset", type=["csv"])
 
 if uploaded_file and st.button("Run Data Science Evaluation"):
     try:
@@ -89,10 +89,16 @@ if uploaded_file and st.button("Run Data Science Evaluation"):
         col2.metric("Missing Values", df.isnull().sum().sum())
         col3.metric("Duplicate Rows", df.duplicated().sum())
         
-        # Class distribution analysis
-        if "reference" in df.columns:
-            st.write("**True Label Distribution (Class Imbalance Check):**")
-            st.bar_chart(df["reference"].value_counts())
+        # Class distribution analysis if a label column exists
+        label_col = None
+        for col in ["reference", "label", "target", "class", "subject"]:
+            if col in df.columns:
+                label_col = col
+                break
+                
+        if label_col:
+            st.write(f"**Distribution based on '{label_col}' column:**")
+            st.bar_chart(df[label_col].value_counts())
 
         # --- STATISTICAL METRICS (SKLEARN) ---
         if "response" in df.columns and "reference" in df.columns:
@@ -103,16 +109,28 @@ if uploaded_file and st.button("Run Data Science Evaluation"):
             acc = accuracy_score(y_true, y_pred)
             st.metric("Model Accuracy", f"{acc * 100:.2f}%")
             
-            # Classification Report
             report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)
-            st.write("**Classification Report (Precision, Recall, F1-Score):**")
+            st.write("**Classification Report:**")
             st.dataframe(pd.DataFrame(report).transpose())
+
+        # --- SMART COLUMN MAPPING FOR GEMINI JUDGE ---
+        col_mapping = {}
+        if "response" not in df.columns:
+            if "text" in df.columns:
+                col_mapping["response"] = "text"
+            elif "title" in df.columns:
+                col_mapping["response"] = "title"
 
         # --- GEMINI LLM JUDGE EVALUATION ---
         with st.spinner("Running Gemini LLM Deep Evaluation..."):
             init_gcp()
             metric = get_eval_metric(topic)
-            eval_task = EvalTask(dataset=df, metrics=[metric])
+            
+            eval_task = EvalTask(
+                dataset=df, 
+                metrics=[metric],
+                metric_column_mapping=col_mapping if col_mapping else None
+            )
             result = eval_task.evaluate()
             
             st.subheader("🤖 Gemini Evaluator Insights")
