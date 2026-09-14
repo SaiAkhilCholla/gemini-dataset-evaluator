@@ -20,19 +20,19 @@ with st.sidebar:
     if not api_key:
         api_key = st.text_input("Gemini API Key", type="password")
     
-    st.info("Connected to Google AI Studio (Free Tier). Auto-retry enabled for high demand.")
+    st.info("Connected to Google AI Studio (Free Tier). Token usage optimized.")
 
 # --- ROBUST API CALL WITH RETRY ---
 def call_gemini_with_retry(client, model, prompt, max_retries=3):
-    delay = 2
+    delay = 3
     for attempt in range(max_retries):
         try:
             return client.models.generate_content(model=model, contents=prompt)
         except Exception as e:
             err_msg = str(e)
-            if ("503" in err_msg or "UNAVAILABLE" in err_msg or "overloaded" in err_msg) and attempt < max_retries - 1:
+            if ("429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "503" in err_msg) and attempt < max_retries - 1:
                 time.sleep(delay)
-                delay *= 2  # Exponential backoff
+                delay *= 2
                 continue
             raise e
 
@@ -69,13 +69,18 @@ if uploaded_file and st.button("Evaluate Entire Dataset"):
                 st.write(f"**Class Balance Distribution ({label_col}):**")
                 st.bar_chart(class_counts)
 
-            # --- 2. GLOBAL GEMINI DATASET JUDGE ---
-            with st.spinner("Gemini is analyzing the dataset stability..."):
+            # --- 2. GLOBAL GEMINI DATASET JUDGE (TOKEN OPTIMIZED) ---
+            with st.spinner("Gemini is analyzing the dataset summary safely within rate limits..."):
                 client = genai.Client(api_key=api_key)
                 
-                # Increased sample size to 500 rows for stable, consistent scoring with fixed seed
-                sample_size = min(500, total_rows)
-                sample_data = df.sample(sample_size, random_state=42).to_string()
+                # Optimized: Sample 10 rows and truncate text to prevent 429 token quota limits
+                sample_size = min(10, total_rows)
+                sampled_df = df.sample(sample_size, random_state=42).copy()
+                
+                for col in sampled_df.select_dtypes(include=['object']).columns:
+                    sampled_df[col] = sampled_df[col].astype(str).str.slice(0, 120)
+                
+                sample_data = sampled_df.to_string()
                 
                 prompt = f"""
                 You are the Head Judge for a Dataset Creation Challenge focused on '{topic}'.
@@ -97,12 +102,7 @@ if uploaded_file and st.button("Evaluate Entire Dataset"):
                 - "recommendation": final feedback for the challenge participant.
                 """
                 
-                # Temperature 0.0 ensures fully deterministic, repeatable output
-                response = client.models.generate_content(
-                    model="gemini-3.6-flash",
-                    contents=prompt,
-                    config={"temperature": 0.0}
-                )
+                response = call_gemini_with_retry(client, "gemini-3.6-flash", prompt)
                 
                 clean_text = response.text.strip()
                 if clean_text.startswith("```json"):
@@ -110,21 +110,21 @@ if uploaded_file and st.button("Evaluate Entire Dataset"):
                 elif clean_text.startswith("```"):
                     clean_text = clean_text[3:-3].strip()
                     
-                eval_result = json.loads(clean_text)
+                eval_json = json.loads(clean_text)
                 
                 # --- 3. DISPLAY CHALLENGE RESULTS ---
                 st.markdown("---")
                 st.subheader("🏆 Challenge Evaluation Report")
                 
                 score_col, verdict_col = st.columns([1, 2])
-                score_col.metric("Overall Dataset Score", f"{eval_result.get('overall_score', 0)} / 100")
-                verdict_col.success(f"**Verdict:** {eval_result.get('verdict', 'Evaluated')}")
+                score_col.metric("Overall Dataset Score", f"{eval_json.get('overall_score', 0)} / 100")
+                verdict_col.success(f"**Verdict:** {eval_json.get('verdict', 'Evaluated')}")
                 
-                st.markdown(f"**💪 Strengths:**\n{eval_result.get('strengths', 'N/A')}")
-                st.markdown(f"**⚠️ Weaknesses & Biases:**\n{eval_result.get('weaknesses', 'N/A')}")
-                st.markdown(f"**💡 Judge's Recommendation:**\n{eval_result.get('recommendation', 'N/A')}")
+                st.markdown(f"**💪 Strengths:**\n{eval_json.get('strengths', 'N/A')}")
+                st.markdown(f"**⚠️ Weaknesses & Biases:**\n{eval_json.get('weaknesses', 'N/A')}")
+                st.markdown(f"**💡 Judge's Recommendation:**\n{eval_json.get('recommendation', 'N/A')}")
                 
-                report_summary = pd.DataFrame([eval_result])
+                report_summary = pd.DataFrame([eval_json])
                 st.download_button(
                     "Download Challenge Report Summary",
                     data=report_summary.to_csv(index=False).encode('utf-8'),
