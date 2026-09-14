@@ -96,8 +96,12 @@ if uploaded_file and st.button("Evaluate Entire Dataset"):
                 - "weaknesses": a paragraph noting any flaws or potential biases.
                 - "recommendation": final feedback for the challenge participant.
                 """
-                
-                response = call_gemini_with_retry(client, "gemini-3.6-flash", prompt)
+                # --- Update this call to include temperature=0.0 ---
+                response = client.models.generate_content(
+                    model="gemini-3.6-flash",
+                    contents=prompt,
+                    config={"temperature": 0.0}  # <--- Forces deterministic scoring
+                )
                 
                 clean_text = response.text.strip()
                 if clean_text.startswith("```json"):
