@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import pandas as pd
 import streamlit as st
@@ -6,9 +7,27 @@ from google import genai
 
 st.set_page_config(page_title="Dataset Challenge Evaluator", layout="wide")
 
-# --- INITIALIZE SESSION STATE FOR LEADERBOARD ---
+LEADERBOARD_FILE = "leaderboard.json"
+
+# --- PERSISTENT LEADERBOARD LOADING ---
+def load_leaderboard():
+    if os.path.exists(LEADERBOARD_FILE):
+        try:
+            with open(LEADERBOARD_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_leaderboard(lb):
+    try:
+        with open(LEADERBOARD_FILE, "w") as f:
+            json.dump(lb, f)
+    except Exception as e:
+        st.error(f"Error saving leaderboard: {e}")
+
 if "leaderboard" not in st.session_state:
-    st.session_state.leaderboard = []
+    st.session_state.leaderboard = load_leaderboard()
 
 # --- UI SIDEBAR ---
 with st.sidebar:
@@ -24,9 +43,21 @@ with st.sidebar:
         api_key = st.text_input("Gemini API Key", type="password")
     
     st.markdown("---")
-    if st.button("🔄 Reset Leaderboard"):
-        st.session_state.leaderboard = []
-        st.success("Leaderboard cleared!")
+    
+    # --- SECURED ADMIN PANEL FOR RESET BUTTON ---
+    with st.expander("🔐 Host / Admin Controls"):
+        admin_pwd = st.text_input("Admin Password", type="password", placeholder="Enter password")
+        expected_pwd = st.secrets.get("admin_password", "srishti2026") # Default fallback password
+        
+        if admin_pwd == expected_pwd:
+            if st.button("🔄 Reset Leaderboard"):
+                st.session_state.leaderboard = []
+                if os.path.exists(LEADERBOARD_FILE):
+                    os.remove(LEADERBOARD_FILE)
+                st.success("Leaderboard wiped clean!")
+                st.rerun()
+        elif admin_pwd:
+            st.error("Incorrect password.")
 
 # --- MULTI-TAB INTERFACE ---
 tab1, tab2 = st.tabs(["📊 Challenge Evaluator", "🏆 Leaderboard"])
@@ -124,7 +155,7 @@ with tab1:
                     eval_json = json.loads(clean_text)
                     score = eval_json.get('overall_score', 0)
                     
-                    # --- ADD TO LEADERBOARD SESSION STATE ---
+                    # --- ADD TO LEADERBOARD & SAVE TO DISK ---
                     entry = {
                         "Team Leader": team_leader,
                         "Dataset File": uploaded_file.name,
@@ -133,12 +164,12 @@ with tab1:
                         "Verdict": eval_json.get('verdict', 'Evaluated')
                     }
                     
-                    # Avoid duplicate rapid entries for same leader & file
                     st.session_state.leaderboard = [item for item in st.session_state.leaderboard if not (item["Team Leader"] == team_leader and item["Dataset File"] == uploaded_file.name)]
                     st.session_state.leaderboard.append(entry)
-                    
-                    # Sort leaderboard by Score descending
                     st.session_state.leaderboard = sorted(st.session_state.leaderboard, key=lambda x: x["Score"], reverse=True)
+                    
+                    # Save persistence file
+                    save_leaderboard(st.session_state.leaderboard)
 
                     # --- 3. DISPLAY CHALLENGE RESULTS ---
                     st.markdown("---")
@@ -172,7 +203,6 @@ with tab2:
     else:
         lb_df = pd.DataFrame(st.session_state.leaderboard)
         
-        # Format trophies for top positions
         trophies = []
         for i in range(len(lb_df)):
             if i == 0:
@@ -185,11 +215,8 @@ with tab2:
                 trophies.append(f"#{i+1}")
                 
         lb_df.insert(0, "Rank", trophies)
-        
-        # Display as a clean styled dataframe/table
         st.dataframe(lb_df, use_container_width=True, hide_index=True)
         
-        # Highlight top 2 winners explicitly
         if len(lb_df) >= 1:
             st.markdown(f"### 🥇 1st Place: **{lb_df.iloc[0]['Team Leader']}** ({lb_df.iloc[0]['Score']} pts)")
         if len(lb_df) >= 2:
