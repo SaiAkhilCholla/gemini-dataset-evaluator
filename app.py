@@ -122,15 +122,23 @@ if uploaded_file and st.button("Run Data Science Evaluation"):
                 col_mapping["response"] = "title"
 
         # --- GEMINI LLM JUDGE EVALUATION ---
+        # --- GEMINI LLM JUDGE EVALUATION (BYOR MODE) ---
         with st.spinner("Running Gemini LLM Deep Evaluation..."):
             init_gcp()
             metric = get_eval_metric(topic)
             
+            # Ensure a 'response' column exists for the evaluator to inspect
+            if "response" not in df.columns:
+                if "text" in df.columns:
+                    df["response"] = df["text"]
+                elif "title" in df.columns:
+                    df["response"] = df["title"]
+            
             eval_task = EvalTask(
                 dataset=df, 
-                metrics=[metric],
-                metric_column_mapping=col_mapping if col_mapping else None
+                metrics=[metric]
             )
+            # Evaluate existing dataset rows without forcing model generation text
             result = eval_task.evaluate()
             
             st.subheader("🤖 Gemini Evaluator Insights")
