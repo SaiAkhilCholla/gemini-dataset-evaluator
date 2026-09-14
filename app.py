@@ -4,23 +4,31 @@ import streamlit as st
 import vertexai
 from google.oauth2 import service_account
 from vertexai.evaluation import EvalTask, PointwiseMetric, PointwiseMetricPromptTemplate
+from sklearn.metrics import classification_report, accuracy_score
 
-st.set_page_config(page_title="GenAI Dataset Evaluator", layout="wide")
-st.title("📊 GenAI Dataset Evaluator")
+st.set_page_config(page_title="Data Science Dataset Evaluator", layout="wide")
+st.title("🔬 Data Science Dataset & Model Evaluator")
 
-# --- GCP AUTHENTICATION ---
+# --- BACKGROUND GCP AUTHENTICATION (Hidden from UI) ---
+location = "us-central1"
+project_id = "dataset-analyser-508617"  # Default fallback
+
+try:
+    if "gcp_service_account" in st.secrets:
+        creds_dict = json.loads(st.secrets["gcp_service_account"])
+        project_id = creds_dict.get("project_id", "dataset-analyser-508617")
+except Exception:
+    pass
+
+# --- CLEAN UI SIDEBAR ---
 with st.sidebar:
-    st.header("1. GCP Setup")
-    project_id = st.text_input("GCP Project ID", placeholder="your-project-id")
-    location = st.text_input("Region", value="us-central1")
-    
-    st.header("2. Evaluation Setup")
+    st.header("⚙️ Evaluation Setup")
     topic = st.selectbox(
         "Classification Task",
         ["Phishing Detection", "Fake News Detection", "Product Review Sentiment", "Cybersecurity Threat", "Emergency Classification"]
     )
+    st.info("Project ID and security credentials are loaded securely in the background.")
 
-# Initialize GCP Auth (Uses Secrets in cloud, default local auth if offline)
 def init_gcp():
     if "gcp_service_account" in st.secrets:
         creds_dict = json.loads(st.secrets["gcp_service_account"])
@@ -29,37 +37,35 @@ def init_gcp():
     else:
         vertexai.init(project=project_id, location=location)
 
-# --- TOPIC METRICS DEFINITION ---
 def get_eval_metric(selected_topic):
     rubrics = {
         "Phishing Detection": {
             "instruction": "Classify text as Phishing or Legitimate.",
             "criteria": {"Phishing": "Urgent requests, credential harvesting, fake links.", "Legitimate": "Normal communication, verifiable sender."},
-            "rating_rubric": {"1": "Incorrect classification or failure to follow criteria.", "5": "Accurate classification matching the criteria."}
+            "rating_rubric": {"1": "Incorrect classification", "5": "Accurate classification"}
         },
         "Fake News Detection": {
             "instruction": "Classify text as Fake or Real.",
             "criteria": {"Fake": "Sensationalist, unverified claims, emotional bias.", "Real": "Objective, verified facts, credible sources."},
-            "rating_rubric": {"1": "Incorrect classification.", "5": "Correct classification."}
+            "rating_rubric": {"1": "Incorrect classification", "5": "Correct classification"}
         },
         "Product Review Sentiment": {
             "instruction": "Classify review as Positive, Negative, or Neutral.",
             "criteria": {"Positive": "Satisfaction, praise.", "Negative": "Disappointment, defects.", "Neutral": "Indifferent, purely informational."},
-            "rating_rubric": {"1": "Incorrect sentiment assignment.", "5": "Accurate sentiment assignment."}
+            "rating_rubric": {"1": "Incorrect sentiment assignment", "5": "Accurate sentiment assignment"}
         },
         "Cybersecurity Threat": {
             "instruction": "Classify as Malware, Phishing, DDoS, or Other.",
             "criteria": {"Malware": "Payloads/viruses.", "Phishing": "Social engineering.", "DDoS": "Traffic exhaustion.", "Other": "General issues."},
-            "rating_rubric": {"1": "Incorrect threat classification.", "5": "Correct threat classification."}
+            "rating_rubric": {"1": "Incorrect threat classification", "5": "Correct threat classification"}
         },
         "Emergency Classification": {
             "instruction": "Classify message as Medical, Fire, Flood, Rescue, or Other.",
             "criteria": {"Medical": "Health crises.", "Fire": "Smoke/flames.", "Flood": "Rising water.", "Rescue": "Trapped individuals.", "Other": "Non-urgent."},
-            "rating_rubric": {"1": "Incorrect emergency category.", "5": "Correct emergency category."}
+            "rating_rubric": {"1": "Incorrect emergency category", "5": "Correct emergency category"}
         }
     }
-    cfg = rubrics.get(selected_topic, rubrics["Phishing Detection"])
-    
+    cfg = rubrics.get(selected_topic, rubrics["Fake News Detection"])
     return PointwiseMetric(
         metric=f'{selected_topic.lower().replace(" ", "_")}_metric',
         metric_prompt_template=PointwiseMetricPromptTemplate(
@@ -70,29 +76,52 @@ def get_eval_metric(selected_topic):
     )
 
 # --- MAIN INTERFACE ---
-uploaded_file = st.file_uploader("Upload CSV (Must contain 'response' and 'reference' columns)", type=["csv"])
+uploaded_file = st.file_uploader("Upload CSV Dataset (Must contain 'response' for predictions and 'reference' for true labels)", type=["csv"])
 
-if uploaded_file and st.button("Run Evaluation"):
-    if not project_id:
-        st.error("Please provide your GCP Project ID in the sidebar.")
-    else:
-        try:
-            init_gcp()
-            df = pd.read_csv(uploaded_file)
+if uploaded_file and st.button("Run Data Science Evaluation"):
+    try:
+        df = pd.read_csv(uploaded_file)
+        
+        # --- DATA SCIENTIST PROFILING ---
+        st.subheader("📊 Dataset Health & Profiling")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Rows", len(df))
+        col2.metric("Missing Values", df.isnull().sum().sum())
+        col3.metric("Duplicate Rows", df.duplicated().sum())
+        
+        # Class distribution analysis
+        if "reference" in df.columns:
+            st.write("**True Label Distribution (Class Imbalance Check):**")
+            st.bar_chart(df["reference"].value_counts())
+
+        # --- STATISTICAL METRICS (SKLEARN) ---
+        if "response" in df.columns and "reference" in df.columns:
+            st.subheader("📈 Statistical Classification Performance")
+            y_true = df["reference"].astype(str)
+            y_pred = df["response"].astype(str)
             
-            with st.spinner("Gemini is evaluating your dataset..."):
-                metric = get_eval_metric(topic)
-                eval_task = EvalTask(dataset=df, metrics=[metric, "exact_match"])
-                result = eval_task.evaluate()
-                
-                st.success("Evaluation Finished!")
-                st.metric("Exact Match Accuracy", f"{result.summary_metrics.get('exact_match', 0) * 100:.1f}%")
-                st.dataframe(result.metrics_table)
-                
-                st.download_button(
-                    "Download Results CSV",
-                    data=result.metrics_table.to_csv(index=False).encode('utf-8'),
-                    file_name="evaluation_results.csv"
-                )
-        except Exception as e:
-            st.error(f"Error running evaluation: {e}")
+            acc = accuracy_score(y_true, y_pred)
+            st.metric("Model Accuracy", f"{acc * 100:.2f}%")
+            
+            # Classification Report
+            report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)
+            st.write("**Classification Report (Precision, Recall, F1-Score):**")
+            st.dataframe(pd.DataFrame(report).transpose())
+
+        # --- GEMINI LLM JUDGE EVALUATION ---
+        with st.spinner("Running Gemini LLM Deep Evaluation..."):
+            init_gcp()
+            metric = get_eval_metric(topic)
+            eval_task = EvalTask(dataset=df, metrics=[metric])
+            result = eval_task.evaluate()
+            
+            st.subheader("🤖 Gemini Evaluator Insights")
+            st.dataframe(result.metrics_table)
+            
+            st.download_button(
+                "Download Complete Analysis CSV",
+                data=result.metrics_table.to_csv(index=False).encode('utf-8'),
+                file_name="ds_evaluation_results.csv"
+            )
+    except Exception as e:
+        st.error(f"Error executing data analysis: {e}")
