@@ -70,16 +70,16 @@ if uploaded_file and st.button("Evaluate Entire Dataset"):
                 st.bar_chart(class_counts)
 
             # --- 2. GLOBAL GEMINI DATASET JUDGE ---
-            with st.spinner("Gemini is analyzing the entire dataset quality (retrying automatically if busy)..."):
+            with st.spinner("Gemini is analyzing the dataset stability..."):
                 client = genai.Client(api_key=api_key)
                 
-                # Fixed seed for consistent reproducible scoring
-                sample_size = min(15, total_rows)
+                # Increased sample size to 500 rows for stable, consistent scoring with fixed seed
+                sample_size = min(500, total_rows)
                 sample_data = df.sample(sample_size, random_state=42).to_string()
                 
                 prompt = f"""
                 You are the Head Judge for a Dataset Creation Challenge focused on '{topic}'.
-                Analyze the following sample from a competitor's submitted dataset of {total_rows} total rows:
+                Analyze the following sample of {sample_size} records from a competitor's submitted dataset of {total_rows} total rows:
                 
                 Dataset Sample:
                 {sample_data}
@@ -91,16 +91,17 @@ if uploaded_file and st.button("Evaluate Entire Dataset"):
                 
                 Respond strictly in valid JSON format with these exact keys:
                 - "overall_score": an integer score from 0 to 100 representing the total dataset grade.
-                - "verdict": a short summary phrase (e.g., "Excellent Submission", "Needs Refinement").
+                - "verdict": a short summary phrase (e.g., "Critically Flawed", "Excellent Submission").
                 - "strengths": a paragraph outlining what makes this dataset great.
                 - "weaknesses": a paragraph noting any flaws or potential biases.
                 - "recommendation": final feedback for the challenge participant.
                 """
-                # --- Update this call to include temperature=0.0 ---
+                
+                # Temperature 0.0 ensures fully deterministic, repeatable output
                 response = client.models.generate_content(
                     model="gemini-3.6-flash",
                     contents=prompt,
-                    config={"temperature": 0.0}  # <--- Forces deterministic scoring
+                    config={"temperature": 0.0}
                 )
                 
                 clean_text = response.text.strip()
