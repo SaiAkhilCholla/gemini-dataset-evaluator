@@ -27,10 +27,11 @@ def save_leaderboard(lb):
 if "leaderboard" not in st.session_state:
     st.session_state.leaderboard = load_leaderboard()
 
+# Keeps track of which API key to use next across manual button clicks
 if "key_index" not in st.session_state:
     st.session_state.key_index = 0
 
-# --- UI SIDEBAR (API Keys & Inputs Hidden from Public View) ---
+# --- UI SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Challenge Setup")
     team_leader = st.text_input("Team Leader Name", placeholder="Enter team leader name")
@@ -41,7 +42,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # --- SECURED ADMIN PANEL FOR RESET & HOST CONTROLS ---
+    # --- SECURED ADMIN PANEL ---
     with st.expander("🔐 Host / Admin Controls"):
         admin_pwd = st.text_input("Admin Password", type="password", placeholder="Enter password")
         expected_pwd = st.secrets.get("admin_password", "srishti2026")
@@ -64,53 +65,19 @@ with tab1:
     st.title("🏆 Dataset Creation Challenge - Global Evaluator")
     uploaded_file = st.file_uploader("Upload Challenge Submission CSV", type=["csv"])
 
-    # --- API CALL WITH BACKGROUND KEY ROTATION ---
-    def call_gemini_with_rotation(keys_list, prompt):
-        if not keys_list:
-            raise Exception("No API keys found in Streamlit Secrets.")
-        
-        current_index = st.session_state.key_index
-        attempts = 0
-        max_attempts = len(keys_list)
-        
-        while attempts < max_attempts:
-            active_key = keys_list[current_index]
-            try:
-                client = genai.Client(api_key=active_key)
-                response = client.models.generate_content(
-                    model="gemini-3.6-flash",
-                    contents=prompt,
-                    config={"temperature": 0.0}
-                )
-                return response
-            except Exception as e:
-                err_msg = str(e)
-                if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
-                    current_index = (current_index + 1) % len(keys_list)
-                    st.session_state.key_index = current_index
-                    attempts += 1
-                    continue
-                else:
-                    raise e
-        
-        # Fallback intelligent scoring if all keys hit quota during live demo
-        return None
-
     if uploaded_file and st.button("Evaluate Entire Dataset"):
         if not team_leader.strip():
             st.error("Please enter the Team Leader Name in the sidebar before evaluating!")
         else:
-            # Load keys securely from Streamlit Secrets behind the scenes
             raw_secrets = st.secrets.get("gemini_api_keys", st.secrets.get("gemini_api_key", ""))
             api_keys_list = [k.strip() for k in raw_secrets.replace(",", "\n").split("\n") if k.strip()]
             
             if not api_keys_list:
-                st.error("API keys are missing in Streamlit Secrets. Please configure them in your app settings.")
+                st.error("API keys are missing in Streamlit Secrets. Please configure them.")
             else:
                 try:
                     df = pd.read_csv(uploaded_file)
                     
-                    # --- 1. DATA INTEGRITY & HEALTH METRICS ---
                     st.subheader("📊 Dataset Health & Integrity")
                     total_rows = len(df)
                     missing_count = int(df.isnull().sum().sum())
@@ -133,9 +100,8 @@ with tab1:
                         st.write(f"**Class Balance Distribution ({label_col}):**")
                         st.bar_chart(class_counts)
 
-                    # --- 2. GLOBAL GEMINI DATASET JUDGE ---
-                    eval_json = None
-                    with st.spinner(f"Evaluating submission for team {team_leader}..."):
+                    # --- SINGLE SHOT API CALL (NO AUTO-RETRY) ---
+                    with st.spinner(f"Evaluating submission for team {team_leader} via Gemini API..."):
                         sample_size = min(10, total_rows)
                         sampled_df = df.sample(sample_size, random_state=42).copy()
                         for col in sampled_df.select_dtypes(include=['object']).columns:
@@ -162,29 +128,25 @@ with tab1:
                         - "recommendation": final feedback for the challenge participant.
                         """
                         
-                        response = call_gemini_with_rotation(api_keys_list, prompt)
+                        # Select the active key for this run, and increment index for the NEXT manual click
+                        active_key = api_keys_list[st.session_state.key_index % len(api_keys_list)]
+                        st.session_state.key_index = (st.session_state.key_index + 1) % len(api_keys_list)
                         
-                        if response:
-                            clean_text = response.text.strip()
-                            if clean_text.startswith("```json"):
-                                clean_text = clean_text[7:-3].strip()
-                            elif clean_text.startswith("```"):
-                                clean_text = clean_text[3:-3].strip()
-                            eval_json = json.loads(clean_text)
-                        else:
-                            # Robust fallback if quota is exhausted so the demo never fails
-                            base_score = 88
-                            penalty = (missing_count * 2) + (dup_count * 3)
-                            score = max(55, min(96, base_score - penalty))
-                            eval_json = {
-                                "overall_score": score,
-                                "verdict": "Solid Submission",
-                                "strengths": f"Dataset contains {total_rows} records with proper structure and clean labeling for {topic}.",
-                                "weaknesses": "Minor formatting variations noted in sample entries.",
-                                "recommendation": "Maintain rigorous checks against missing values."
-                            }
-
-                    score = eval_json.get('overall_score', 0)
+                        client = genai.Client(api_key=active_key)
+                        response = client.models.generate_content(
+                            model="gemini-3.6-flash",
+                            contents=prompt,
+                            config={"temperature": 0.0}
+                        )
+                        
+                        clean_text = response.text.strip()
+                        if clean_text.startswith("```json"):
+                            clean_text = clean_text[7:-3].strip()
+                        elif clean_text.startswith("```"):
+                            clean_text = clean_text[3:-3].strip()
+                        
+                        eval_json = json.loads(clean_text)
+                        score = eval_json.get('overall_score', 0)
 
                     # --- ADD TO LEADERBOARD & SAVE ---
                     entry = {
@@ -220,12 +182,13 @@ with tab1:
                     )
                     
                 except Exception as e:
+                    # Instantly surfaces real API errors without attempting to mask or retry them
                     st.error(f"Evaluation Error: {e}")
 
 # ================= TAB 2: LEADERBOARD =================
 with tab2:
     st.title("🏆 Challenge Leaderboard")
-    st.markdown("Top submissions ranked by their evaluation score.")
+    st.markdown("Top submissions ranked purely by Gemini API evaluation score.")
 
     if not st.session_state.leaderboard:
         st.info("No submissions evaluated yet. Head over to the **Challenge Evaluator** tab to evaluate a dataset!")
@@ -238,8 +201,6 @@ with tab2:
                 trophies.append("🥇 Gold")
             elif i == 1:
                 trophies.append("🥈 Silver")
-            elif i == 2:
-                trophies.append("🥉 Bronze")
             else:
                 trophies.append(f"#{i+1}")
                 
