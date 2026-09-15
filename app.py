@@ -8,11 +8,14 @@ st.set_page_config(page_title="Dataset Challenge Evaluator", layout="wide")
 
 LEADERBOARD_FILE = "leaderboard.json"
 
+# --- FORTIFIED PERSISTENT LEADERBOARD LOADING ---
 def load_leaderboard():
     if os.path.exists(LEADERBOARD_FILE):
         try:
             with open(LEADERBOARD_FILE, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
         except Exception:
             return []
     return []
@@ -27,7 +30,6 @@ def save_leaderboard(lb):
 if "leaderboard" not in st.session_state:
     st.session_state.leaderboard = load_leaderboard()
 
-# Keeps track of the currently active API key
 if "key_index" not in st.session_state:
     st.session_state.key_index = 0
 
@@ -52,7 +54,21 @@ with st.sidebar:
         if admin_pwd == expected_pwd:
             is_admin = True
             st.success("Admin access granted. Leaderboard unlocked below.")
-            if st.button("🔄 Reset Leaderboard"):
+            
+            # --- NEW: RETRIEVE BACKEND DATA AS CSV ---
+            if st.session_state.leaderboard:
+                lb_export_df = pd.DataFrame(st.session_state.leaderboard)
+                st.download_button(
+                    label="📥 Download Backend Data (CSV)",
+                    data=lb_export_df.to_csv(index=False).encode('utf-8'),
+                    file_name="challenge_backend_results.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            else:
+                st.info("No data in backend yet.")
+            
+            if st.button("🔄 Reset Leaderboard", use_container_width=True):
                 st.session_state.leaderboard = []
                 if os.path.exists(LEADERBOARD_FILE):
                     os.remove(LEADERBOARD_FILE)
@@ -147,7 +163,7 @@ if uploaded_file and st.button("Evaluate Entire Dataset"):
                     eval_json = json.loads(clean_text)
                     score = eval_json.get('overall_score', 0)
 
-                # --- ADD TO LEADERBOARD & SAVE ---
+                # --- ADD TO LEADERBOARD & SAVE (NO ANTI-SPAM RESTRICTIONS) ---
                 entry = {
                     "Team Leader": team_leader,
                     "Dataset File": uploaded_file.name,
@@ -156,7 +172,6 @@ if uploaded_file and st.button("Evaluate Entire Dataset"):
                     "Verdict": eval_json.get('verdict', 'Evaluated')
                 }
                 
-                st.session_state.leaderboard = [item for item in st.session_state.leaderboard if not (item["Team Leader"] == team_leader and item["Dataset File"] == uploaded_file.name)]
                 st.session_state.leaderboard.append(entry)
                 st.session_state.leaderboard = sorted(st.session_state.leaderboard, key=lambda x: x["Score"], reverse=True)
                 save_leaderboard(st.session_state.leaderboard)
@@ -214,7 +229,6 @@ if is_admin:
                 
         lb_df.insert(0, "Rank", trophies)
         
-        # Uses st.table() instead of st.dataframe() to force rendering of ALL rows without a scrollbar
         st.table(lb_df.set_index("Rank"))
         
         if len(lb_df) >= 1:
