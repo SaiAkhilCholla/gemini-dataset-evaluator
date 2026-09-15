@@ -193,12 +193,13 @@ if uploaded_file and st.button("Evaluate Entire Dataset"):
 if is_admin:
     st.markdown("---")
     st.title("🔐 Host View: Secret Challenge Leaderboard")
-    st.markdown("Top submissions ranked by their API evaluation score. **(Invisible to public participants)**")
-
+    
     if not st.session_state.leaderboard:
         st.info("No submissions evaluated yet.")
     else:
         lb_df = pd.DataFrame(st.session_state.leaderboard)
+        
+        st.markdown(f"**Total Teams Evaluated: {len(lb_df)}** (Showing all records)")
         
         trophies = []
         for i in range(len(lb_df)):
@@ -206,11 +207,15 @@ if is_admin:
                 trophies.append("🥇 Gold")
             elif i == 1:
                 trophies.append("🥈 Silver")
+            elif i == 2:
+                trophies.append("🥉 Bronze")
             else:
                 trophies.append(f"#{i+1}")
                 
         lb_df.insert(0, "Rank", trophies)
-        st.dataframe(lb_df, use_container_width=True, hide_index=True)
+        
+        # Uses st.table() instead of st.dataframe() to force rendering of ALL rows without a scrollbar
+        st.table(lb_df.set_index("Rank"))
         
         if len(lb_df) >= 1:
             st.markdown(f"### 🥇 1st Place: **{lb_df.iloc[0]['Team Leader']}** ({lb_df.iloc[0]['Score']} pts)")
