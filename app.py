@@ -27,7 +27,7 @@ def save_leaderboard(lb):
 if "leaderboard" not in st.session_state:
     st.session_state.leaderboard = load_leaderboard()
 
-# Keeps track of which API key to use next across manual button clicks
+# Keeps track of the currently active API key
 if "key_index" not in st.session_state:
     st.session_state.key_index = 0
 
@@ -100,7 +100,7 @@ with tab1:
                         st.write(f"**Class Balance Distribution ({label_col}):**")
                         st.bar_chart(class_counts)
 
-                    # --- SINGLE SHOT API CALL (NO AUTO-RETRY) ---
+                    # --- EFFICIENT STICKY KEY API CALL ---
                     with st.spinner(f"Evaluating submission for team {team_leader} via Gemini API..."):
                         sample_size = min(10, total_rows)
                         sampled_df = df.sample(sample_size, random_state=42).copy()
@@ -128,9 +128,9 @@ with tab1:
                         - "recommendation": final feedback for the challenge participant.
                         """
                         
-                        # Select the active key for this run, and increment index for the NEXT manual click
+                        # Use the current key without advancing the index prematurely
+                        current_key_number = (st.session_state.key_index % len(api_keys_list)) + 1
                         active_key = api_keys_list[st.session_state.key_index % len(api_keys_list)]
-                        st.session_state.key_index = (st.session_state.key_index + 1) % len(api_keys_list)
                         
                         client = genai.Client(api_key=active_key)
                         response = client.models.generate_content(
@@ -164,7 +164,7 @@ with tab1:
 
                     # --- 3. DISPLAY RESULTS ---
                     st.markdown("---")
-                    st.subheader("🏆 Challenge Evaluation Report")
+                    st.subheader(f"🏆 Challenge Evaluation Report (Used Key #{current_key_number})")
                     
                     score_col, verdict_col = st.columns([1, 2])
                     score_col.metric("Overall Dataset Score", f"{score} / 100")
@@ -182,8 +182,14 @@ with tab1:
                     )
                     
                 except Exception as e:
-                    # Instantly surfaces real API errors without attempting to mask or retry them
-                    st.error(f"Evaluation Error: {e}")
+                    err_msg = str(e)
+                    # If quota is exhausted, advance to the next key and halt cleanly
+                    if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
+                        st.session_state.key_index += 1
+                        next_key_num = (st.session_state.key_index % len(api_keys_list)) + 1
+                        st.warning(f"⚠️ Current API key reached its daily limit. The system has automatically shifted to Key #{next_key_num}. Please click **Evaluate Entire Dataset** again to continue.")
+                    else:
+                        st.error(f"Evaluation Error: {e}")
 
 # ================= TAB 2: LEADERBOARD =================
 with tab2:
